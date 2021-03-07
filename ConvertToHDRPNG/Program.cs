@@ -13,35 +13,42 @@ namespace ConvertToHDRPNG
             CoconaLiteApp.Run<Program>(args);
         }
 
-        public void Convert(string input, string output)
+        public unsafe void Convert(string input, string output)
         {
             using var src = new MagickImage(input);
             int width = src.Width;
             int height = src.Height;
-            var srcPixels = src.GetPixels();
+            var srcPixels = src.GetPixelsUnsafe();
             Process(output, width, height, (dstPixels, bt2100pq) =>
             {
                 Func<Color, Color> fn = bt2100pq ? src => src.Rec709ToRec2020().LinearToST2084() : src => src;
                 Parallel.For(0, height, y =>
                 {
+                    var src = (float*)srcPixels.GetAreaPointer(0, y, width, 1).ToPointer();
+                    var srcChannels = srcPixels.Channels;
+                    var dst = (float*)dstPixels.GetAreaPointer(0, y, width, 1).ToPointer();
+                    var dstChannels = dstPixels.Channels;
                     for (int x = 0; x < width; x++)
                     {
-                        var pixel = srcPixels.GetPixel(x, y);
-                        var dstColor = fn(new Color(pixel[0], pixel[1], pixel[2]));
-                        pixel[0] = dstColor.R;
-                        pixel[1] = dstColor.G;
-                        pixel[2] = dstColor.B;
-                        dstPixels.SetPixel(pixel);
+                        var dstColor = fn(new Color(src[0], src[1], src[2]));
+
+                        dst[0] = dstColor.R;
+                        dst[1] = dstColor.G;
+                        dst[2] = dstColor.B;
+                        src += srcChannels;
+                        dst += dstChannels;
                     }
                 });
             });
         }
 
-        public void Gradation(string output, int width = 1024, int height = 1024, float start = 0.0f, float end = 1.0f) =>
+        public unsafe void Gradation(string output, int width = 1024, int height = 1024, float start = 0.0f, float end = 1.0f) =>
             Process(output, width, height, (dstPixels, bt2100pq) =>
             {
                 Parallel.For(0, height, y =>
                 {
+                    var dst = (float*)dstPixels.GetAreaPointer(0, y, width, 1).ToPointer();
+                    var dstChannels = dstPixels.Channels;
                     var yy = (float)y / height;
                     Func<float, Color> fn;
                     Func<float, Color> fn2;
@@ -72,18 +79,21 @@ namespace ConvertToHDRPNG
                     for (int x = 0; x < width; x++)
                     {
                         var dstColor = fn((start + x * (end - start) / width) * 65535.0f);
-                        dstPixels.SetPixel(new Pixel(x, y, new float[] { dstColor.R, dstColor.G, dstColor.B }));
+                        dst[0] = dstColor.R;
+                        dst[1] = dstColor.G;
+                        dst[2] = dstColor.B;
+                        dst += dstChannels;
                     }
                 });
             });
 
-        private void Process(string output, int width, int height, Action<IPixelCollection<float>, bool> fn)
+        private void Process(string output, int width, int height, Action<IUnsafePixelCollection<float>, bool> fn)
         {
             using var dst = new MagickImage(MagickColor.FromRgb(0, 0, 0), width, height);
             bool exr = string.Equals(".exr", System.IO.Path.GetExtension(output), StringComparison.OrdinalIgnoreCase);
 
             dst.ColorSpace = exr ? ColorSpace.RGB : ColorSpace.sRGB;
-            fn(dst.GetPixels(), !exr);
+            fn(dst.GetPixelsUnsafe(), !exr);
             dst.Write(output, exr ? MagickFormat.Exr : MagickFormat.Png48);
         }
 
