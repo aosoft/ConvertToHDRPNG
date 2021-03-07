@@ -15,6 +15,26 @@ namespace ConvertToHDRPNG
 
         public void Convert(string input, string output)
         {
+            using var src = new MagickImage(input);
+            int width = src.Width;
+            int height = src.Height;
+            var srcPixels = src.GetPixels();
+            Process(output, width, height, (dstPixels, bt2100pq) =>
+            {
+                Func<Color, Color> fn = bt2100pq ? src => src.Rec709ToRec2020().LinearToST2084() : src => src;
+                Parallel.For(0, height, y =>
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        var pixel = srcPixels.GetPixel(x, y);
+                        var dstColor = fn(new Color(pixel[0], pixel[1], pixel[2]));
+                        pixel[0] = dstColor.R;
+                        pixel[1] = dstColor.G;
+                        pixel[2] = dstColor.B;
+                        dstPixels.SetPixel(pixel);
+                    }
+                });
+            });
         }
 
         public void Gradation(string output, int width = 1024, int height = 1024, float start = 0.0f, float end = 1.0f) =>
